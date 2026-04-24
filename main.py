@@ -1,5 +1,4 @@
-def main():
-    print("Hello from mediaexp!")
+from src.experiment import main
 
 
 if __name__ == "__main__":
