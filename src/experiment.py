@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +51,6 @@ def summarize_case(
     original_bits = len(sample.data) * 8
     lzw_ratio = _lzw_bits(lzw_codes) / original_bits if original_bits else 0.0
     lzss_ratio = _lzss_bits(lzss_tokens, lzss) / original_bits if original_bits else 0.0
-
     return {
         "category": sample.category,
         "dataset": sample.dataset,
@@ -60,7 +60,6 @@ def summarize_case(
         "lzw_units": len(lzw_codes),
         "lzss_units": len(lzss_tokens),
         "structure_score": structure.structure_score,
-        "text_repetition_score": structure.text_repetition_score,
         "byte_entropy": structure.byte_entropy_bits,
         "window_entropy": structure.window_entropy_bits,
         "lzw_ratio": round(lzw_ratio, 3),
@@ -80,7 +79,6 @@ def _print_table(rows: list[dict[str, str | int | float]]) -> None:
         "name",
         "input_bytes",
         "structure_score",
-        "text_repetition_score",
         "lzw_ratio",
         "lzss_ratio",
         "detail",
@@ -301,6 +299,61 @@ def _write_structure_plot_pdf(
     plt.close(fig)
 
 
+def _write_text_repeat_plot_pdf(
+    rows: list[dict[str, str | int | float]], output_path: Path
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager, rcParams
+
+    text_rows = [
+        row
+        for row in rows
+        if row["category"] == "text"
+        and int(row["input_bytes"]) > 0
+        and float(row.get("text_repeat_frequency", 0.0)) > 0
+    ]
+    if len(text_rows) < 2:
+        return
+
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    for font_name in ("Songti SC", "STHeiti", "Arial Unicode MS"):
+        if font_name in available_fonts:
+            rcParams["font.family"] = font_name
+            break
+    rcParams["axes.unicode_minus"] = False
+
+    x = np.array([float(row["text_repeat_frequency"]) for row in text_rows], dtype=float)
+    y_lzw = np.array([float(row["lzw_ratio"]) for row in text_rows], dtype=float)
+    y_lzss = np.array([float(row["lzss_ratio"]) for row in text_rows], dtype=float)
+
+    fig, ax = plt.subplots(figsize=(8.4, 5.4))
+    ax.scatter(x, y_lzw, label="LZW samples", alpha=0.7, s=26, color="#1f2937")
+    ax.scatter(x, y_lzss, label="LZSS samples", alpha=0.7, s=26, color="#6b7280")
+
+    for values, color, label in (
+        (y_lzw, "#2563eb", "LZW fit"),
+        (y_lzss, "#dc2626", "LZSS fit"),
+    ):
+        if np.std(x) == 0 or np.std(values) == 0:
+            continue
+        correlation = float(np.corrcoef(x, values)[0, 1])
+        slope, intercept = np.polyfit(x, values, 1)
+        x_line = np.linspace(x.min(), x.max(), 200)
+        y_line = slope * x_line + intercept
+        ax.plot(x_line, y_line, color=color, linewidth=2.4, label=f"{label} (r={correlation:.3f})")
+
+    ax.set_xlabel("Text Phrase Repeat Frequency")
+    ax.set_ylabel("Compression Ratio")
+    ax.set_title("Text Repeat Frequency vs Compression Ratio")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", frameon=True)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_path, format="pdf")
+    plt.close(fig)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run LZW/LZSS experiments on image and audio directories."
@@ -410,6 +463,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional CSV output path for correlation and fit statistics",
     )
+    parser.add_argument(
+        "--text-repeat-plot-out",
+        type=Path,
+        help="Optional PDF output path for text repeat frequency fitting plot",
+    )
     return parser
 
 
@@ -438,6 +496,7 @@ def run_experiment(
     csv_out: Path | None = None,
     plot_out: Path | None = None,
     corr_out: Path | None = None,
+    text_repeat_plot_out: Path | None = None,
 ) -> list[dict[str, str | int | float]]:
     lzw = LZWEncoder()
     lzss = LZSSEncoder()
@@ -539,6 +598,9 @@ def run_experiment(
     if corr_out is not None:
         _write_correlation_csv(rows, corr_out)
         print(f"Wrote correlations: {corr_out}")
+    if text_repeat_plot_out is not None:
+        _write_text_repeat_plot_pdf(rows, text_repeat_plot_out)
+        print(f"Wrote text repeat plot: {text_repeat_plot_out}")
     return rows
 
 
@@ -586,6 +648,7 @@ def main(argv: list[str] | None = None) -> None:
         csv_out=args.csv_out,
         plot_out=args.plot_out,
         corr_out=args.corr_out,
+        text_repeat_plot_out=args.text_repeat_plot_out,
     )
 
 
