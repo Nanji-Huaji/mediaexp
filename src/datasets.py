@@ -9,7 +9,7 @@ from scipy.io import wavfile
 
 
 IMAGE_EXTENSIONS = {".bmp", ".pgm", ".ppm", ".png", ".jpg", ".jpeg"}
-AUDIO_EXTENSIONS = {".wav"}
+AUDIO_EXTENSIONS = {".wav", ".flac"}
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,17 @@ def _load_image_bytes(path: Path) -> tuple[bytes, str]:
 
 
 def _load_audio_bytes(path: Path) -> tuple[bytes, str]:
+    if path.suffix.lower() == ".flac":
+        import soundfile as sf
+
+        samples, sample_rate = sf.read(path, dtype="int16")
+        channels = 1 if samples.ndim == 1 else samples.shape[1]
+        frame_count = int(samples.shape[0])
+        return (
+            np.asarray(samples).tobytes(),
+            f"{sample_rate} Hz, {channels} ch, {frame_count} frames, dtype=int16",
+        )
+
     sample_rate, samples = wavfile.read(path)
     channels = 1 if samples.ndim == 1 else samples.shape[1]
     frame_count = int(samples.shape[0])
@@ -178,6 +189,121 @@ class LocalDatasetManager:
         raise ValueError(f"Unsupported category: {category}")
 
 
+def import_huggingface_dataset(
+    asset_root: Path,
+    category: str,
+    dataset_id: str,
+    dataset_name: str,
+    split: str = "train",
+    revision: str | None = None,
+    config_name: str | None = None,
+    column: str | None = None,
+    limit: int = 10,
+) -> list[Path]:
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+
+    try:
+        from datasets import load_dataset
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Importing from Hugging Face requires the 'datasets' package."
+        ) from exc
+
+    dataset = load_dataset(dataset_id, config_name, split=split, revision=revision)
+    if category == "audio":
+        from datasets import Audio
+
+        target_column = column or _infer_hf_column(category, dataset.column_names)
+        dataset = dataset.cast_column(target_column, Audio(decode=False))
+    if column is None:
+        column = _infer_hf_column(category, dataset.column_names)
+
+    target_dir = (
+        asset_root / ("images" if category == "image" else "audio") / dataset_name
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    imported: list[Path] = []
+    for index, sample in enumerate(dataset):
+        if len(imported) >= limit:
+            break
+        item = sample[column]
+        if category == "image":
+            path = _save_hf_image(target_dir, index, item)
+        else:
+            path = _save_hf_audio(target_dir, index, item)
+        imported.append(path)
+    return imported
+
+
+def _infer_hf_column(category: str, column_names: list[str]) -> str:
+    candidates = ["image", "img", "audio", "speech"]
+    if category == "image":
+        preferred = candidates[:2]
+    else:
+        preferred = candidates[2:]
+
+    for name in preferred:
+        if name in column_names:
+            return name
+
+    raise ValueError(
+        f"Could not infer a {category} column from {column_names}. Use --column explicitly."
+    )
+
+
+def _save_hf_image(target_dir: Path, index: int, item: object) -> Path:
+    try:
+        from PIL import Image
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Saving Hugging Face images requires Pillow.") from exc
+
+    path = target_dir / f"sample_{index:04d}.png"
+    if isinstance(item, dict) and "path" in item and item["path"]:
+        source = Path(item["path"])
+        if source.exists():
+            data = source.read_bytes()
+            path.write_bytes(data)
+            return path
+
+    if hasattr(item, "save"):
+        item.save(path)
+        return path
+
+    image = Image.fromarray(np.asarray(item))
+    image.save(path)
+    return path
+
+
+def _save_hf_audio(target_dir: Path, index: int, item: object) -> Path:
+    if not isinstance(item, dict):
+        raise ValueError("Unsupported Hugging Face audio sample format")
+
+    if "bytes" in item and item["bytes"] is not None:
+        original_path = str(item.get("path", ""))
+        suffix = Path(original_path).suffix or ".bin"
+        path = target_dir / f"sample_{index:04d}{suffix}"
+        path.write_bytes(item["bytes"])
+        return path
+
+    if "array" in item and "sampling_rate" in item:
+        array = np.asarray(item["array"])
+        sample_rate = int(item["sampling_rate"])
+        path = target_dir / f"sample_{index:04d}.wav"
+
+        if np.issubdtype(array.dtype, np.floating):
+            clipped = np.clip(array, -1.0, 1.0)
+            pcm = (clipped * 32767).astype(np.int16)
+        else:
+            pcm = array.astype(np.int16, copy=False)
+
+        wavfile.write(path, sample_rate, pcm)
+        return path
+
+    raise ValueError("Unsupported Hugging Face audio sample format")
+
+
 def load_cases_from_directory(directory: Path, category: str) -> list[SampleCase]:
     if not directory.exists():
         raise FileNotFoundError(f"Directory not found: {directory}")
@@ -211,5 +337,6 @@ __all__ = [
     "IMAGE_EXTENSIONS",
     "LocalDatasetManager",
     "SampleCase",
+    "import_huggingface_dataset",
     "load_cases_from_directory",
 ]

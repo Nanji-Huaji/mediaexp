@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from src.datasets import LocalDatasetManager, SampleCase, load_cases_from_directory
 from src.encoder import LZWEncoder, LZSSEncoder, LiteralToken, MatchToken
@@ -106,6 +108,114 @@ def _print_summary(rows: list[dict[str, str | int | float]]) -> None:
         )
 
 
+def _write_csv(rows: list[dict[str, str | int | float]], output_path: Path) -> None:
+    if not rows:
+        return
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    headers = list(rows[0].keys())
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_structure_plot(
+    rows: list[dict[str, str | int | float]], output_path: Path
+) -> None:
+    if not rows:
+        return
+
+    width = 900
+    height = 420
+    margin_left = 70
+    margin_right = 20
+    margin_top = 30
+    margin_bottom = 55
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+
+    def scale_x(value: float) -> float:
+        return margin_left + value * plot_width
+
+    def scale_y(value: float) -> float:
+        clamped = max(0.0, min(2.0, value))
+        return margin_top + (1.0 - clamped / 2.0) * plot_height
+
+    colors = {"image": "#2563eb", "audio": "#dc2626", "text": "#059669"}
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        "<style>text{font-family:Arial,sans-serif;font-size:12px} .axis{stroke:#333;stroke-width:1} .grid{stroke:#ddd;stroke-width:1} .label{fill:#111} .legend{font-size:12px}</style>",
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="white"/>',
+    ]
+
+    for step in range(5):
+        x_value = step / 4
+        x = scale_x(x_value)
+        parts.append(
+            f'<line class="grid" x1="{x:.1f}" y1="{margin_top}" x2="{x:.1f}" y2="{height - margin_bottom}"/>'
+        )
+        parts.append(
+            f'<text class="label" x="{x:.1f}" y="{height - margin_bottom + 20}" text-anchor="middle">{x_value:.2f}</text>'
+        )
+
+    for step in range(5):
+        y_value = step * 0.5
+        y = scale_y(y_value)
+        parts.append(
+            f'<line class="grid" x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}"/>'
+        )
+        parts.append(
+            f'<text class="label" x="{margin_left - 10}" y="{y + 4:.1f}" text-anchor="end">{y_value:.1f}</text>'
+        )
+
+    parts.append(
+        f'<line class="axis" x1="{margin_left}" y1="{height - margin_bottom}" x2="{width - margin_right}" y2="{height - margin_bottom}"/>'
+    )
+    parts.append(
+        f'<line class="axis" x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{height - margin_bottom}"/>'
+    )
+    parts.append(
+        f'<text class="label" x="{margin_left + plot_width / 2:.1f}" y="{height - 15}" text-anchor="middle">Structure Score</text>'
+    )
+    parts.append(
+        f'<text class="label" x="20" y="{margin_top + plot_height / 2:.1f}" transform="rotate(-90 20 {margin_top + plot_height / 2:.1f})" text-anchor="middle">Compression Ratio</text>'
+    )
+    parts.append(
+        f'<text class="label" x="{width / 2:.1f}" y="20" text-anchor="middle">Structure vs Compression Ratio</text>'
+    )
+
+    legend_y = margin_top + 10
+    for index, label in enumerate(["LZW", "LZSS"]):
+        cx = width - 180 + index * 80
+        color = "#111827" if label == "LZW" else "#6b7280"
+        parts.append(f'<circle cx="{cx}" cy="{legend_y}" r="5" fill="{color}"/>')
+        parts.append(
+            f'<text class="legend" x="{cx + 10}" y="{legend_y + 4}" fill="#111">{label}</text>'
+        )
+
+    for row in rows:
+        x = scale_x(float(row["structure_score"]))
+        y_lzw = scale_y(float(row["lzw_ratio"]))
+        y_lzss = scale_y(float(row["lzss_ratio"]))
+        category_color = colors.get(str(row["category"]), "#7c3aed")
+        label = escape(f"{row['category']}/{row['dataset']}/{row['name']}")
+
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y_lzw:.1f}" r="5" fill="#111827"><title>{label} LZW={float(row["lzw_ratio"]):.3f}</title></circle>'
+        )
+        parts.append(
+            f'<rect x="{x - 4:.1f}" y="{y_lzss - 4:.1f}" width="8" height="8" fill="#6b7280"><title>{label} LZSS={float(row["lzss_ratio"]):.3f}</title></rect>'
+        )
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{y_lzw:.1f}" x2="{x:.1f}" y2="{y_lzss:.1f}" stroke="{category_color}" stroke-width="1.5" opacity="0.7"/>'
+        )
+
+    parts.append("</svg>")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(parts), encoding="utf-8")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run LZW/LZSS experiments on image and audio directories."
@@ -137,6 +247,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         help="Maximum number of samples to load from each managed dataset",
     )
+    parser.add_argument(
+        "--csv-out",
+        type=Path,
+        help="Optional CSV output path for experiment rows",
+    )
+    parser.add_argument(
+        "--plot-out",
+        type=Path,
+        help="Optional SVG output path for structure-vs-compression plot",
+    )
     return parser
 
 
@@ -147,6 +267,8 @@ def run_experiment(
     image_datasets: list[str] | None = None,
     audio_datasets: list[str] | None = None,
     limit_per_dataset: int | None = None,
+    csv_out: Path | None = None,
+    plot_out: Path | None = None,
 ) -> list[dict[str, str | int | float]]:
     lzw = LZWEncoder()
     lzss = LZSSEncoder()
@@ -179,12 +301,18 @@ def run_experiment(
     _print_table(rows)
     if rows:
         _print_summary(rows)
+    if csv_out is not None:
+        _write_csv(rows, csv_out)
+        print(f"\nWrote CSV: {csv_out}")
+    if plot_out is not None:
+        _write_structure_plot(rows, plot_out)
+        print(f"Wrote plot: {plot_out}")
     return rows
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if (
         args.image_dir is None
@@ -203,6 +331,8 @@ def main() -> None:
         image_datasets=args.image_datasets,
         audio_datasets=args.audio_datasets,
         limit_per_dataset=args.limit_per_dataset,
+        csv_out=args.csv_out,
+        plot_out=args.plot_out,
     )
 
 
