@@ -4,9 +4,16 @@ import argparse
 import csv
 import math
 from pathlib import Path
-from xml.sax.saxutils import escape
 
-from src.datasets import LocalDatasetManager, SampleCase, load_cases_from_directory
+import numpy as np
+from tqdm import tqdm
+
+from src.datasets import (
+    LocalDatasetManager,
+    SampleCase,
+    load_cases_from_directory,
+    load_huggingface_cases,
+)
 from src.encoder import LZWEncoder, LZSSEncoder, LiteralToken, MatchToken
 from src.structure_metrics import analyze_structure
 
@@ -53,6 +60,7 @@ def summarize_case(
         "lzw_units": len(lzw_codes),
         "lzss_units": len(lzss_tokens),
         "structure_score": structure.structure_score,
+        "text_repetition_score": structure.text_repetition_score,
         "byte_entropy": structure.byte_entropy_bits,
         "window_entropy": structure.window_entropy_bits,
         "lzw_ratio": round(lzw_ratio, 3),
@@ -72,6 +80,7 @@ def _print_table(rows: list[dict[str, str | int | float]]) -> None:
         "name",
         "input_bytes",
         "structure_score",
+        "text_repetition_score",
         "lzw_ratio",
         "lzss_ratio",
         "detail",
@@ -108,6 +117,40 @@ def _print_summary(rows: list[dict[str, str | int | float]]) -> None:
         )
 
 
+def _compute_correlation_and_fit(
+    rows: list[dict[str, str | int | float]], ratio_key: str
+) -> dict[str, float] | None:
+    filtered = [row for row in rows if int(row["input_bytes"]) > 0]
+    if len(filtered) < 2:
+        return None
+
+    x = np.array([float(row["structure_score"]) for row in filtered], dtype=float)
+    y = np.array([float(row[ratio_key]) for row in filtered], dtype=float)
+    if np.std(x) == 0 or np.std(y) == 0:
+        correlation = 0.0
+    else:
+        correlation = float(np.corrcoef(x, y)[0, 1])
+    slope, intercept = np.polyfit(x, y, 1)
+    return {
+        "correlation": float(correlation),
+        "slope": float(slope),
+        "intercept": float(intercept),
+    }
+
+
+def _print_correlation_summary(rows: list[dict[str, str | int | float]]) -> None:
+    print()
+    print("Correlation summary:")
+    for ratio_key, label in (("lzw_ratio", "LZW"), ("lzss_ratio", "LZSS")):
+        stats = _compute_correlation_and_fit(rows, ratio_key)
+        if stats is None:
+            print(f"- {label}: insufficient data")
+            continue
+        print(
+            f"- {label}: r={stats['correlation']:.4f}, fit=y={stats['slope']:.4f}x+{stats['intercept']:.4f}"
+        )
+
+
 def _write_csv(rows: list[dict[str, str | int | float]], output_path: Path) -> None:
     if not rows:
         return
@@ -120,100 +163,142 @@ def _write_csv(rows: list[dict[str, str | int | float]], output_path: Path) -> N
         writer.writerows(rows)
 
 
-def _write_structure_plot(
+def _write_correlation_csv(
+    rows: list[dict[str, str | int | float]], output_path: Path
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["metric", "correlation", "slope", "intercept"],
+        )
+        writer.writeheader()
+        for ratio_key, label in (("lzw_ratio", "LZW"), ("lzss_ratio", "LZSS")):
+            stats = _compute_correlation_and_fit(rows, ratio_key)
+            if stats is None:
+                continue
+            writer.writerow(
+                {
+                    "metric": label,
+                    "correlation": round(stats["correlation"], 6),
+                    "slope": round(stats["slope"], 6),
+                    "intercept": round(stats["intercept"], 6),
+                }
+            )
+
+
+def _write_structure_plot_pdf(
     rows: list[dict[str, str | int | float]], output_path: Path
 ) -> None:
     if not rows:
         return
 
-    width = 900
-    height = 420
-    margin_left = 70
-    margin_right = 20
-    margin_top = 30
-    margin_bottom = 55
-    plot_width = width - margin_left - margin_right
-    plot_height = height - margin_top - margin_bottom
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager, rcParams
 
-    def scale_x(value: float) -> float:
-        return margin_left + value * plot_width
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    for font_name in ("Songti SC", "STHeiti", "Arial Unicode MS"):
+        if font_name in available_fonts:
+            rcParams["font.family"] = font_name
+            break
+    rcParams["axes.unicode_minus"] = False
 
-    def scale_y(value: float) -> float:
-        clamped = max(0.0, min(2.0, value))
-        return margin_top + (1.0 - clamped / 2.0) * plot_height
+    filtered = [row for row in rows if int(row["input_bytes"]) > 0]
+    if not filtered:
+        return
 
-    colors = {"image": "#2563eb", "audio": "#dc2626", "text": "#059669"}
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-        "<style>text{font-family:Arial,sans-serif;font-size:12px} .axis{stroke:#333;stroke-width:1} .grid{stroke:#ddd;stroke-width:1} .label{fill:#111} .legend{font-size:12px}</style>",
-        f'<rect x="0" y="0" width="{width}" height="{height}" fill="white"/>',
+    groups = [
+        ("text", "文本样本"),
+        ("image", "图像样本"),
+        ("audio", "音频样本"),
+        ("all", "全部样本"),
     ]
 
-    for step in range(5):
-        x_value = step / 4
-        x = scale_x(x_value)
-        parts.append(
-            f'<line class="grid" x1="{x:.1f}" y1="{margin_top}" x2="{x:.1f}" y2="{height - margin_bottom}"/>'
-        )
-        parts.append(
-            f'<text class="label" x="{x:.1f}" y="{height - margin_bottom + 20}" text-anchor="middle">{x_value:.2f}</text>'
-        )
-
-    for step in range(5):
-        y_value = step * 0.5
-        y = scale_y(y_value)
-        parts.append(
-            f'<line class="grid" x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}"/>'
-        )
-        parts.append(
-            f'<text class="label" x="{margin_left - 10}" y="{y + 4:.1f}" text-anchor="end">{y_value:.1f}</text>'
-        )
-
-    parts.append(
-        f'<line class="axis" x1="{margin_left}" y1="{height - margin_bottom}" x2="{width - margin_right}" y2="{height - margin_bottom}"/>'
-    )
-    parts.append(
-        f'<line class="axis" x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{height - margin_bottom}"/>'
-    )
-    parts.append(
-        f'<text class="label" x="{margin_left + plot_width / 2:.1f}" y="{height - 15}" text-anchor="middle">Structure Score</text>'
-    )
-    parts.append(
-        f'<text class="label" x="20" y="{margin_top + plot_height / 2:.1f}" transform="rotate(-90 20 {margin_top + plot_height / 2:.1f})" text-anchor="middle">Compression Ratio</text>'
-    )
-    parts.append(
-        f'<text class="label" x="{width / 2:.1f}" y="20" text-anchor="middle">Structure vs Compression Ratio</text>'
+    plt.rcParams.update(
+        {
+            "font.size": 13,
+            "axes.titlesize": 15,
+            "axes.labelsize": 14,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "legend.fontsize": 11,
+        }
     )
 
-    legend_y = margin_top + 10
-    for index, label in enumerate(["LZW", "LZSS"]):
-        cx = width - 180 + index * 80
-        color = "#111827" if label == "LZW" else "#6b7280"
-        parts.append(f'<circle cx="{cx}" cy="{legend_y}" r="5" fill="{color}"/>')
-        parts.append(
-            f'<text class="legend" x="{cx + 10}" y="{legend_y + 4}" fill="#111">{label}</text>'
-        )
+    fig, axes = plt.subplots(2, 2, figsize=(12.5, 9.2), sharex=True, sharey=True)
+    axes = axes.flatten()
 
-    for row in rows:
-        x = scale_x(float(row["structure_score"]))
-        y_lzw = scale_y(float(row["lzw_ratio"]))
-        y_lzss = scale_y(float(row["lzss_ratio"]))
-        category_color = colors.get(str(row["category"]), "#7c3aed")
-        label = escape(f"{row['category']}/{row['dataset']}/{row['name']}")
+    for ax, (category, title) in zip(axes, groups):
+        subset = (
+            filtered
+            if category == "all"
+            else [row for row in filtered if row["category"] == category]
+        )
+        if not subset:
+            ax.set_title(title)
+            ax.text(
+                0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes
+            )
+            ax.grid(True, alpha=0.3)
+            continue
 
-        parts.append(
-            f'<circle cx="{x:.1f}" cy="{y_lzw:.1f}" r="5" fill="#111827"><title>{label} LZW={float(row["lzw_ratio"]):.3f}</title></circle>'
-        )
-        parts.append(
-            f'<rect x="{x - 4:.1f}" y="{y_lzss - 4:.1f}" width="8" height="8" fill="#6b7280"><title>{label} LZSS={float(row["lzss_ratio"]):.3f}</title></rect>'
-        )
-        parts.append(
-            f'<line x1="{x:.1f}" y1="{y_lzw:.1f}" x2="{x:.1f}" y2="{y_lzss:.1f}" stroke="{category_color}" stroke-width="1.5" opacity="0.7"/>'
-        )
+        x = np.array([float(row["structure_score"]) for row in subset], dtype=float)
+        y_lzw = np.array([float(row["lzw_ratio"]) for row in subset], dtype=float)
+        y_lzss = np.array([float(row["lzss_ratio"]) for row in subset], dtype=float)
 
-    parts.append("</svg>")
+        ax.scatter(x, y_lzw, label="LZW samples", alpha=0.7, s=26, color="#1f2937")
+        ax.scatter(x, y_lzss, label="LZSS samples", alpha=0.7, s=26, color="#6b7280")
+
+        for color, label, ratio_key in (
+            ("#2563eb", "LZW fit", "lzw_ratio"),
+            ("#dc2626", "LZSS fit", "lzss_ratio"),
+        ):
+            stats = _compute_correlation_and_fit(subset, ratio_key)
+            if stats is None:
+                continue
+            x_line = np.linspace(0.0, 1.0, 200)
+            y_line = stats["slope"] * x_line + stats["intercept"]
+            ax.plot(
+                x_line,
+                y_line,
+                color=color,
+                linewidth=2.4,
+                label=f"{label} (r={stats['correlation']:.3f})",
+            )
+
+        lzw_stats = _compute_correlation_and_fit(subset, "lzw_ratio")
+        lzss_stats = _compute_correlation_and_fit(subset, "lzss_ratio")
+        corr_lines: list[str] = []
+        if lzw_stats is not None:
+            corr_lines.append(f"LZW r={lzw_stats['correlation']:.3f}")
+        if lzss_stats is not None:
+            corr_lines.append(f"LZSS r={lzss_stats['correlation']:.3f}")
+        if corr_lines:
+            ax.text(
+                0.03,
+                0.97,
+                "\n".join(corr_lines),
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=12,
+                bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.85},
+            )
+
+        ax.set_title(title)
+        ax.set_xlim(0.0, 1.0)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", frameon=True)
+
+    for ax in axes[2:]:
+        ax.set_xlabel("Structure Score")
+    axes[0].set_ylabel("Compression Ratio")
+    axes[2].set_ylabel("Compression Ratio")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(parts), encoding="utf-8")
+    fig.tight_layout()
+    fig.savefig(output_path, format="pdf")
+    plt.close(fig)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -227,10 +312,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Managed dataset root containing images/ and audio/",
     )
     parser.add_argument(
+        "--text-dir", type=Path, help="Directory containing text samples"
+    )
+    parser.add_argument(
         "--image-dir", type=Path, help="Directory containing image samples"
     )
     parser.add_argument(
         "--audio-dir", type=Path, help="Directory containing WAV samples"
+    )
+    parser.add_argument(
+        "--text-datasets",
+        nargs="+",
+        help="Managed text dataset names under assets/text/",
+    )
+    parser.add_argument(
+        "--hf-text-dataset",
+        help="Hugging Face text dataset id for direct pipeline use",
     )
     parser.add_argument(
         "--image-datasets",
@@ -238,14 +335,65 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Managed image dataset names under assets/images/",
     )
     parser.add_argument(
+        "--hf-image-dataset",
+        help="Hugging Face image dataset id for direct pipeline use",
+    )
+    parser.add_argument(
         "--audio-datasets",
         nargs="+",
         help="Managed audio dataset names under assets/audio/",
     )
     parser.add_argument(
+        "--hf-audio-dataset",
+        help="Hugging Face audio dataset id for direct pipeline use",
+    )
+    parser.add_argument(
+        "--hf-config-name",
+        help="Optional Hugging Face config name for direct pipeline use",
+    )
+    parser.add_argument(
+        "--hf-text-config-name",
+        help="Optional Hugging Face config name for direct text pipeline use",
+    )
+    parser.add_argument(
+        "--hf-image-config-name",
+        help="Optional Hugging Face config name for direct image pipeline use",
+    )
+    parser.add_argument(
+        "--hf-audio-config-name",
+        help="Optional Hugging Face config name for direct audio pipeline use",
+    )
+    parser.add_argument(
+        "--hf-split",
+        default="train",
+        help="Split used by direct Hugging Face pipeline",
+    )
+    parser.add_argument(
+        "--hf-revision",
+        help="Optional revision used by direct Hugging Face pipeline",
+    )
+    parser.add_argument(
+        "--hf-text-column",
+        help="Optional text column for direct Hugging Face pipeline",
+    )
+    parser.add_argument(
+        "--hf-image-column",
+        help="Optional image column for direct Hugging Face pipeline",
+    )
+    parser.add_argument(
+        "--hf-audio-column",
+        help="Optional audio column for direct Hugging Face pipeline",
+    )
+    parser.add_argument(
         "--limit-per-dataset",
         type=int,
         help="Maximum number of samples to load from each managed dataset",
+    )
+    parser.add_argument(
+        "--min-text-bytes",
+        type=int,
+        default=0,
+        help="Filter out text samples shorter than this byte length",
     )
     parser.add_argument(
         "--csv-out",
@@ -255,31 +403,62 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--plot-out",
         type=Path,
-        help="Optional SVG output path for structure-vs-compression plot",
+        help="Optional PDF output path for structure-vs-compression plot",
+    )
+    parser.add_argument(
+        "--corr-out",
+        type=Path,
+        help="Optional CSV output path for correlation and fit statistics",
     )
     return parser
 
 
 def run_experiment(
+    text_dir: Path | None = None,
     image_dir: Path | None = None,
     audio_dir: Path | None = None,
     asset_root: Path = Path("assets"),
+    text_datasets: list[str] | None = None,
     image_datasets: list[str] | None = None,
     audio_datasets: list[str] | None = None,
+    hf_text_dataset: str | None = None,
+    hf_image_dataset: str | None = None,
+    hf_audio_dataset: str | None = None,
+    hf_config_name: str | None = None,
+    hf_text_config_name: str | None = None,
+    hf_image_config_name: str | None = None,
+    hf_audio_config_name: str | None = None,
+    hf_split: str = "train",
+    hf_revision: str | None = None,
+    hf_text_column: str | None = None,
+    hf_image_column: str | None = None,
+    hf_audio_column: str | None = None,
     limit_per_dataset: int | None = None,
+    min_text_bytes: int = 0,
     csv_out: Path | None = None,
     plot_out: Path | None = None,
+    corr_out: Path | None = None,
 ) -> list[dict[str, str | int | float]]:
     lzw = LZWEncoder()
     lzss = LZSSEncoder()
 
     cases: list[SampleCase] = []
+    if text_dir is not None:
+        cases.extend(load_cases_from_directory(text_dir, category="text"))
     if image_dir is not None:
         cases.extend(load_cases_from_directory(image_dir, category="image"))
     if audio_dir is not None:
         cases.extend(load_cases_from_directory(audio_dir, category="audio"))
 
     manager = LocalDatasetManager(asset_root)
+    if text_datasets:
+        cases.extend(
+            manager.load_cases(
+                categories={"text"},
+                datasets=set(text_datasets),
+                limit_per_dataset=limit_per_dataset,
+            )
+        )
     if image_datasets:
         cases.extend(
             manager.load_cases(
@@ -296,17 +475,70 @@ def run_experiment(
                 limit_per_dataset=limit_per_dataset,
             )
         )
+    if hf_text_dataset:
+        cases.extend(
+            load_huggingface_cases(
+                category="text",
+                dataset_id=hf_text_dataset,
+                split=hf_split,
+                revision=hf_revision,
+                config_name=hf_text_config_name or hf_config_name,
+                column=hf_text_column,
+                limit=limit_per_dataset or 10,
+                min_text_bytes=min_text_bytes,
+            )
+        )
+    if hf_image_dataset:
+        cases.extend(
+            load_huggingface_cases(
+                category="image",
+                dataset_id=hf_image_dataset,
+                split=hf_split,
+                revision=hf_revision,
+                config_name=hf_image_config_name or hf_config_name,
+                column=hf_image_column,
+                limit=limit_per_dataset or 10,
+            )
+        )
+    if hf_audio_dataset:
+        cases.extend(
+            load_huggingface_cases(
+                category="audio",
+                dataset_id=hf_audio_dataset,
+                split=hf_split,
+                revision=hf_revision,
+                config_name=hf_audio_config_name or hf_config_name,
+                column=hf_audio_column,
+                limit=limit_per_dataset or 10,
+            )
+        )
 
-    rows = [summarize_case(sample, lzw, lzss) for sample in cases]
+    if min_text_bytes > 0:
+        cases = [
+            sample
+            for sample in cases
+            if sample.category != "text"
+            or sample.dataset == (hf_text_dataset or "")
+            or len(sample.data) >= min_text_bytes
+        ]
+
+    rows = [
+        summarize_case(sample, lzw, lzss)
+        for sample in tqdm(cases, desc="Running compression experiment", unit="sample")
+    ]
     _print_table(rows)
     if rows:
         _print_summary(rows)
+        _print_correlation_summary(rows)
     if csv_out is not None:
         _write_csv(rows, csv_out)
         print(f"\nWrote CSV: {csv_out}")
     if plot_out is not None:
-        _write_structure_plot(rows, plot_out)
+        _write_structure_plot_pdf(rows, plot_out)
         print(f"Wrote plot: {plot_out}")
+    if corr_out is not None:
+        _write_correlation_csv(rows, corr_out)
+        print(f"Wrote correlations: {corr_out}")
     return rows
 
 
@@ -315,24 +547,45 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if (
-        args.image_dir is None
+        args.text_dir is None
+        and args.image_dir is None
         and args.audio_dir is None
+        and not args.text_datasets
         and not args.image_datasets
         and not args.audio_datasets
+        and args.hf_text_dataset is None
+        and args.hf_image_dataset is None
+        and args.hf_audio_dataset is None
     ):
         parser.error(
             "Provide at least one direct directory option or one managed dataset option"
         )
 
     run_experiment(
+        text_dir=args.text_dir,
         image_dir=args.image_dir,
         audio_dir=args.audio_dir,
         asset_root=args.asset_root,
+        text_datasets=args.text_datasets,
         image_datasets=args.image_datasets,
         audio_datasets=args.audio_datasets,
+        hf_text_dataset=args.hf_text_dataset,
+        hf_image_dataset=args.hf_image_dataset,
+        hf_audio_dataset=args.hf_audio_dataset,
+        hf_config_name=args.hf_config_name,
+        hf_text_config_name=args.hf_text_config_name,
+        hf_image_config_name=args.hf_image_config_name,
+        hf_audio_config_name=args.hf_audio_config_name,
+        hf_split=args.hf_split,
+        hf_revision=args.hf_revision,
+        hf_text_column=args.hf_text_column,
+        hf_image_column=args.hf_image_column,
+        hf_audio_column=args.hf_audio_column,
         limit_per_dataset=args.limit_per_dataset,
+        min_text_bytes=args.min_text_bytes,
         csv_out=args.csv_out,
         plot_out=args.plot_out,
+        corr_out=args.corr_out,
     )
 
 

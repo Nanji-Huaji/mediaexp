@@ -6,10 +6,12 @@ from typing import Iterable
 
 import numpy as np
 from scipy.io import wavfile
+from tqdm import tqdm
 
 
 IMAGE_EXTENSIONS = {".bmp", ".pgm", ".ppm", ".png", ".jpg", ".jpeg"}
 AUDIO_EXTENSIONS = {".wav", ".flac"}
+TEXT_EXTENSIONS = {".txt", ".md"}
 
 
 @dataclass(frozen=True)
@@ -83,12 +85,19 @@ def _load_audio_bytes(path: Path) -> tuple[bytes, str]:
     )
 
 
+def _load_text_bytes(path: Path) -> tuple[bytes, str]:
+    text = path.read_text(encoding="utf-8")
+    data = text.encode("utf-8")
+    line_count = text.count("\n") + (1 if text else 0)
+    return data, f"UTF-8 text, {line_count} lines, {len(data)} bytes"
+
+
 class LocalDatasetManager:
     def __init__(self, asset_root: Path):
         self.asset_root = asset_root
 
     def discover_datasets(self, category: str | None = None) -> list[DatasetSpec]:
-        categories = [category] if category is not None else ["image", "audio"]
+        categories = [category] if category is not None else ["text", "image", "audio"]
         specs: list[DatasetSpec] = []
         for item in categories:
             specs.extend(self._discover_category(item))
@@ -161,7 +170,9 @@ class LocalDatasetManager:
         return _iter_files(spec.root, extensions)
 
     def _path_to_case(self, spec: DatasetSpec, path: Path) -> SampleCase:
-        if spec.category == "image":
+        if spec.category == "text":
+            data, detail = _load_text_bytes(path)
+        elif spec.category == "image":
             data, detail = _load_image_bytes(path)
         else:
             data, detail = _load_audio_bytes(path)
@@ -176,12 +187,19 @@ class LocalDatasetManager:
         )
 
     def _category_dir(self, category: str) -> Path:
-        if category not in {"image", "audio"}:
+        if category not in {"text", "image", "audio"}:
             raise ValueError(f"Unsupported category: {category}")
-        suffix = "images" if category == "image" else "audio"
+        if category == "text":
+            suffix = "text"
+        elif category == "image":
+            suffix = "images"
+        else:
+            suffix = "audio"
         return self.asset_root / suffix
 
     def _extensions_for_category(self, category: str) -> set[str]:
+        if category == "text":
+            return TEXT_EXTENSIONS
         if category == "image":
             return IMAGE_EXTENSIONS
         if category == "audio":
@@ -237,12 +255,86 @@ def import_huggingface_dataset(
     return imported
 
 
+def load_huggingface_cases(
+    category: str,
+    dataset_id: str,
+    split: str = "train",
+    revision: str | None = None,
+    config_name: str | None = None,
+    column: str | None = None,
+    limit: int = 10,
+    dataset_name: str | None = None,
+    min_text_bytes: int = 0,
+) -> list[SampleCase]:
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+
+    try:
+        from datasets import Audio, load_dataset
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Loading from Hugging Face requires the 'datasets' package."
+        ) from exc
+
+    dataset = load_dataset(dataset_id, config_name, split=split, revision=revision)
+    if category == "audio":
+        target_column = column or _infer_hf_column(category, dataset.column_names)
+        dataset = dataset.cast_column(target_column, Audio(decode=False))
+    if column is None:
+        column = _infer_hf_column(category, dataset.column_names)
+
+    resolved_name = dataset_name or dataset_id.replace("/", "_")
+    cases: list[SampleCase] = []
+    total = len(dataset) if hasattr(dataset, "__len__") else None
+    iterator = tqdm(
+        dataset,
+        total=total,
+        desc=f"Loading HF {category}:{resolved_name}",
+        unit="sample",
+    )
+    for index, sample in enumerate(iterator):
+        if len(cases) >= limit:
+            break
+        item = sample[column]
+        if category == "text":
+            data, detail, source = _hf_text_case_parts(item, sample, column)
+            if len(data) < min_text_bytes:
+                continue
+        elif category == "image":
+            data, detail, source = _hf_image_case_parts(item)
+        else:
+            data, detail, source = _hf_audio_case_parts(item)
+
+        cases.append(
+            SampleCase(
+                category=category,
+                dataset=resolved_name,
+                name=f"sample_{index:04d}",
+                source=source,
+                data=data,
+                detail=detail,
+            )
+        )
+    return cases
+
+
 def _infer_hf_column(category: str, column_names: list[str]) -> str:
-    candidates = ["image", "img", "audio", "speech"]
-    if category == "image":
-        preferred = candidates[:2]
+    candidates = [
+        "text",
+        "content",
+        "sentence",
+        "article",
+        "image",
+        "img",
+        "audio",
+        "speech",
+    ]
+    if category == "text":
+        preferred = candidates[:4]
+    elif category == "image":
+        preferred = candidates[4:6]
     else:
-        preferred = candidates[2:]
+        preferred = candidates[6:]
 
     for name in preferred:
         if name in column_names:
@@ -304,17 +396,82 @@ def _save_hf_audio(target_dir: Path, index: int, item: object) -> Path:
     raise ValueError("Unsupported Hugging Face audio sample format")
 
 
+def _hf_text_case_parts(
+    item: object, sample: dict[str, object], column: str
+) -> tuple[bytes, str, Path | None]:
+    if isinstance(item, str):
+        data = item.encode("utf-8")
+        line_count = item.count("\n") + (1 if item else 0)
+        return data, f"HF text, {line_count} lines, {len(data)} bytes", None
+
+    for value in sample.values():
+        if isinstance(value, str):
+            data = value.encode("utf-8")
+            line_count = value.count("\n") + (1 if value else 0)
+            return data, f"HF text, {line_count} lines, {len(data)} bytes", None
+
+    raise ValueError(
+        f"Unsupported Hugging Face text sample format in column '{column}'"
+    )
+
+
+def _hf_image_case_parts(item: object) -> tuple[bytes, str, Path | None]:
+    if hasattr(item, "size"):
+        array = np.asarray(item)
+        return array.tobytes(), f"pixels {array.shape}, dtype={array.dtype}", None
+
+    array = np.asarray(item)
+    return array.tobytes(), f"pixels {array.shape}, dtype={array.dtype}", None
+
+
+def _hf_audio_case_parts(item: object) -> tuple[bytes, str, Path | None]:
+    if not isinstance(item, dict):
+        raise ValueError("Unsupported Hugging Face audio sample format")
+
+    if "bytes" in item and item["bytes"] is not None:
+        data_bytes = item["bytes"]
+        source_name = str(item.get("path", ""))
+        source = Path(source_name) if source_name else None
+        return data_bytes, f"HF audio bytes, {len(data_bytes)} bytes", source
+
+    if "array" in item and "sampling_rate" in item:
+        array = np.asarray(item["array"])
+        sample_rate = int(item["sampling_rate"])
+        if np.issubdtype(array.dtype, np.floating):
+            clipped = np.clip(array, -1.0, 1.0)
+            pcm = (clipped * 32767).astype(np.int16)
+        else:
+            pcm = array.astype(np.int16, copy=False)
+        data = pcm.tobytes()
+        channels = 1 if pcm.ndim == 1 else pcm.shape[1]
+        frame_count = int(pcm.shape[0])
+        return (
+            data,
+            f"{sample_rate} Hz, {channels} ch, {frame_count} frames, dtype=int16",
+            None,
+        )
+
+    raise ValueError("Unsupported Hugging Face audio sample format")
+
+
 def load_cases_from_directory(directory: Path, category: str) -> list[SampleCase]:
     if not directory.exists():
         raise FileNotFoundError(f"Directory not found: {directory}")
     if not directory.is_dir():
         raise NotADirectoryError(f"Not a directory: {directory}")
 
-    extensions = IMAGE_EXTENSIONS if category == "image" else AUDIO_EXTENSIONS
+    if category == "text":
+        extensions = TEXT_EXTENSIONS
+    elif category == "image":
+        extensions = IMAGE_EXTENSIONS
+    else:
+        extensions = AUDIO_EXTENSIONS
     dataset_name = directory.name
     cases: list[SampleCase] = []
     for path in _iter_files(directory, extensions):
-        if category == "image":
+        if category == "text":
+            data, detail = _load_text_bytes(path)
+        elif category == "image":
             data, detail = _load_image_bytes(path)
         else:
             data, detail = _load_audio_bytes(path)
@@ -337,6 +494,8 @@ __all__ = [
     "IMAGE_EXTENSIONS",
     "LocalDatasetManager",
     "SampleCase",
+    "TEXT_EXTENSIONS",
     "import_huggingface_dataset",
+    "load_huggingface_cases",
     "load_cases_from_directory",
 ]

@@ -13,6 +13,7 @@ class StructureMetrics:
     window_entropy_bits: float
     normalized_window_entropy: float
     structure_score: float
+    text_repetition_score: float
 
 
 def _entropy_from_counts(counts: np.ndarray) -> float:
@@ -71,6 +72,7 @@ def analyze_structure(data: bytes, window_size: int = 2) -> StructureMetrics:
 
     # Lower entropy means stronger regularity, so use one minus the average entropy.
     structure_score = 1.0 - ((normalized_byte + normalized_window) / 2.0)
+    text_repetition_score = repeated_ngram_ratio(data, n=3)
 
     return StructureMetrics(
         byte_entropy_bits=round(byte_entropy_bits, 4),
@@ -78,7 +80,27 @@ def analyze_structure(data: bytes, window_size: int = 2) -> StructureMetrics:
         window_entropy_bits=round(window_entropy_bits, 4),
         normalized_window_entropy=round(normalized_window, 4),
         structure_score=round(structure_score, 4),
+        text_repetition_score=round(text_repetition_score, 4),
     )
+
+
+def repeated_ngram_ratio(data: bytes, n: int = 3) -> float:
+    if n < 1:
+        raise ValueError("n must be positive")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return 0.0
+
+    tokens = text.split()
+    if len(tokens) < n:
+        return 0.0
+
+    ngrams = [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
+    unique = len(set(ngrams))
+    total = len(ngrams)
+    return 1.0 - (unique / total)
 
 
 __all__ = [
@@ -86,5 +108,6 @@ __all__ = [
     "analyze_structure",
     "byte_entropy",
     "normalized_entropy",
+    "repeated_ngram_ratio",
     "window_entropy",
 ]

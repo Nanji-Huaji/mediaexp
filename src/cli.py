@@ -22,7 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("datasets-list", help="List local datasets")
     list_parser.add_argument(
         "--category",
-        choices=["image", "audio"],
+        choices=["text", "image", "audio"],
         help="Only list one category",
     )
 
