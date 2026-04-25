@@ -1,0 +1,7 @@
+category,dataset,name,source,input_bytes,lzw_units,lzss_units,structure_score,byte_entropy,window_entropy,lzw_ratio,lzss_ratio,detail
+image,hf_mnist,sample_0000,assets/images/hf_mnist/sample_0000.png,784,182,179,0.8124,1.8285,2.3448,0.261,0.34,"pixels (28, 28), dtype=uint8"
+image,hf_mnist,sample_0001,assets/images/hf_mnist/sample_0001.png,784,202,196,0.7969,1.9196,2.6613,0.29,0.359,"pixels (28, 28), dtype=uint8"
+image,hf_mnist,sample_0002,assets/images/hf_mnist/sample_0002.png,784,167,145,0.8471,1.4551,1.9834,0.24,0.291,"pixels (28, 28), dtype=uint8"
+audio,hf_librispeech_dummy,sample_0000,assets/audio/hf_librispeech_dummy/sample_0000.flac,187360,95788,152379,0.1626,6.8467,13.1045,1.086,1.01,"16000 Hz, 1 ch, 93680 frames, dtype=int16"
+audio,hf_librispeech_dummy,sample_0001,assets/audio/hf_librispeech_dummy/sample_0001.flac,154080,82314,126325,0.1522,6.9262,13.2774,1.135,1.014,"16000 Hz, 1 ch, 77040 frames, dtype=int16"
+audio,hf_librispeech_dummy,sample_0002,assets/audio/hf_librispeech_dummy/sample_0002.flac,399520,194815,332525,0.1474,6.9374,13.4074,1.097,1.025,"16000 Hz, 1 ch, 199760 frames, dtype=int16"

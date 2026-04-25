@@ -1,0 +1,6 @@
+category,dataset,name,source,input_bytes,lzw_units,lzss_units,structure_score,byte_entropy,window_entropy,lzw_ratio,lzss_ratio,detail
+text,public_samples,sample_news,assets/text/public_samples/sample_news.txt,208,157,177,0.5211,4.2678,6.7892,0.849,1.029,"UTF-8 text, 3 lines, 208 bytes"
+text,synthetic_structured,pattern_blocks,assets/text/synthetic_structured/pattern_blocks.txt,100,45,21,0.7015,2.9404,3.6713,0.506,0.324,"UTF-8 text, 5 lines, 100 bytes"
+text,synthetic_structured,repeated_phrases,assets/text/synthetic_structured/repeated_phrases.txt,265,160,98,0.5369,4.3626,6.0937,0.679,0.473,"UTF-8 text, 6 lines, 265 bytes"
+text,synthetic_unstructured,random_chars,assets/text/synthetic_unstructured/random_chars.txt,144,129,142,0.4338,5.5959,6.9255,1.008,1.118,"UTF-8 text, 4 lines, 144 bytes"
+text,synthetic_unstructured,random_words,assets/text/synthetic_unstructured/random_words.txt,210,160,173,0.5227,4.2407,6.7926,0.857,1.016,"UTF-8 text, 4 lines, 210 bytes"

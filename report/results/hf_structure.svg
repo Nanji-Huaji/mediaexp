@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420">
+<style>text{font-family:Arial,sans-serif;font-size:12px} .axis{stroke:#333;stroke-width:1} .grid{stroke:#ddd;stroke-width:1} .label{fill:#111} .legend{font-size:12px}</style>
+<rect x="0" y="0" width="900" height="420" fill="white"/>
+<line class="grid" x1="70.0" y1="30" x2="70.0" y2="365"/>
+<text class="label" x="70.0" y="385" text-anchor="middle">0.00</text>
+<line class="grid" x1="272.5" y1="30" x2="272.5" y2="365"/>
+<text class="label" x="272.5" y="385" text-anchor="middle">0.25</text>
+<line class="grid" x1="475.0" y1="30" x2="475.0" y2="365"/>
+<text class="label" x="475.0" y="385" text-anchor="middle">0.50</text>
+<line class="grid" x1="677.5" y1="30" x2="677.5" y2="365"/>
+<text class="label" x="677.5" y="385" text-anchor="middle">0.75</text>
+<line class="grid" x1="880.0" y1="30" x2="880.0" y2="365"/>
+<text class="label" x="880.0" y="385" text-anchor="middle">1.00</text>
+<line class="grid" x1="70" y1="365.0" x2="880" y2="365.0"/>
+<text class="label" x="60" y="369.0" text-anchor="end">0.0</text>
+<line class="grid" x1="70" y1="281.2" x2="880" y2="281.2"/>
+<text class="label" x="60" y="285.2" text-anchor="end">0.5</text>
+<line class="grid" x1="70" y1="197.5" x2="880" y2="197.5"/>
+<text class="label" x="60" y="201.5" text-anchor="end">1.0</text>
+<line class="grid" x1="70" y1="113.8" x2="880" y2="113.8"/>
+<text class="label" x="60" y="117.8" text-anchor="end">1.5</text>
+<line class="grid" x1="70" y1="30.0" x2="880" y2="30.0"/>
+<text class="label" x="60" y="34.0" text-anchor="end">2.0</text>
+<line class="axis" x1="70" y1="365" x2="880" y2="365"/>
+<line class="axis" x1="70" y1="30" x2="70" y2="365"/>
+<text class="label" x="475.0" y="405" text-anchor="middle">Structure Score</text>
+<text class="label" x="20" y="197.5" transform="rotate(-90 20 197.5)" text-anchor="middle">Compression Ratio</text>
+<text class="label" x="450.0" y="20" text-anchor="middle">Structure vs Compression Ratio</text>
+<circle cx="720" cy="40" r="5" fill="#111827"/>
+<text class="legend" x="730" y="44" fill="#111">LZW</text>
+<circle cx="800" cy="40" r="5" fill="#6b7280"/>
+<text class="legend" x="810" y="44" fill="#111">LZSS</text>
+<circle cx="728.0" cy="321.3" r="5" fill="#111827"><title>image/hf_mnist/sample_0000 LZW=0.261</title></circle>
+<rect x="724.0" y="304.1" width="8" height="8" fill="#6b7280"><title>image/hf_mnist/sample_0000 LZSS=0.340</title></rect>
+<line x1="728.0" y1="321.3" x2="728.0" y2="308.1" stroke="#2563eb" stroke-width="1.5" opacity="0.7"/>
+<circle cx="715.5" cy="316.4" r="5" fill="#111827"><title>image/hf_mnist/sample_0001 LZW=0.290</title></circle>
+<rect x="711.5" y="300.9" width="8" height="8" fill="#6b7280"><title>image/hf_mnist/sample_0001 LZSS=0.359</title></rect>
+<line x1="715.5" y1="316.4" x2="715.5" y2="304.9" stroke="#2563eb" stroke-width="1.5" opacity="0.7"/>
+<circle cx="756.2" cy="324.8" r="5" fill="#111827"><title>image/hf_mnist/sample_0002 LZW=0.240</title></circle>
+<rect x="752.2" y="312.3" width="8" height="8" fill="#6b7280"><title>image/hf_mnist/sample_0002 LZSS=0.291</title></rect>
+<line x1="756.2" y1="324.8" x2="756.2" y2="316.3" stroke="#2563eb" stroke-width="1.5" opacity="0.7"/>
+<circle cx="201.7" cy="183.1" r="5" fill="#111827"><title>audio/hf_librispeech_dummy/sample_0000 LZW=1.086</title></circle>
+<rect x="197.7" y="191.8" width="8" height="8" fill="#6b7280"><title>audio/hf_librispeech_dummy/sample_0000 LZSS=1.010</title></rect>
+<line x1="201.7" y1="183.1" x2="201.7" y2="195.8" stroke="#dc2626" stroke-width="1.5" opacity="0.7"/>
+<circle cx="193.3" cy="174.9" r="5" fill="#111827"><title>audio/hf_librispeech_dummy/sample_0001 LZW=1.135</title></circle>
+<rect x="189.3" y="191.2" width="8" height="8" fill="#6b7280"><title>audio/hf_librispeech_dummy/sample_0001 LZSS=1.014</title></rect>
+<line x1="193.3" y1="174.9" x2="193.3" y2="195.2" stroke="#dc2626" stroke-width="1.5" opacity="0.7"/>
+<circle cx="189.4" cy="181.3" r="5" fill="#111827"><title>audio/hf_librispeech_dummy/sample_0002 LZW=1.097</title></circle>
+<rect x="185.4" y="189.3" width="8" height="8" fill="#6b7280"><title>audio/hf_librispeech_dummy/sample_0002 LZSS=1.025</title></rect>
+<line x1="189.4" y1="181.3" x2="189.4" y2="193.3" stroke="#dc2626" stroke-width="1.5" opacity="0.7"/>
+</svg>

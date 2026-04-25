@@ -1,0 +1,6 @@
+category,dataset,name,source,input_bytes,lzw_units,lzss_units,structure_score,byte_entropy,window_entropy,lzw_ratio,lzss_ratio,detail
+text,wikitext,sample_0000,<memory>,0,0,0,1.0,0.0,0.0,0.0,0.0,"HF text, 0 lines, 0 bytes"
+text,wikitext,sample_0001,<memory>,30,28,28,0.611,3.8981,4.6511,1.05,1.092,"HF text, 2 lines, 30 bytes"
+text,wikitext,sample_0002,<memory>,0,0,0,1.0,0.0,0.0,0.0,0.0,"HF text, 0 lines, 0 bytes"
+text,wikitext,sample_0003,<memory>,727,448,468,0.4727,4.6865,7.5017,0.77,0.865,"HF text, 2 lines, 727 bytes"
+text,wikitext,sample_0004,<memory>,524,343,364,0.4946,4.4091,7.3533,0.818,0.896,"HF text, 2 lines, 524 bytes"
